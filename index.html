@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>3D 廚師帽</title>
+<title>大廚炒菜 3D</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -13,6 +13,8 @@
   #canvas, #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
   #gl { pointer-events: none; }
   #status { position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 16px; font-size: 15px; font-weight: 600;
+    padding: 7px 14px; border-radius: 999px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); pointer-events: none; z-index: 5; }
+  #score { position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 16px; font-size: 15px; font-weight: 700;
     padding: 7px 14px; border-radius: 999px; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); pointer-events: none; z-index: 5; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
     display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; z-index: 5;
@@ -36,80 +38,91 @@
   <canvas id="canvas"></canvas>
   <canvas id="gl"></canvas>
   <div id="status">尚未啟動</div>
+  <div id="score">🍳 0</div>
   <div id="bar">
     <label><input type="checkbox" id="showCam" checked> 鏡頭畫面</label>
+    <label><input type="checkbox" id="showHands"> 手部骨架</label>
     <button id="flip">🔄 切換鏡頭</button>
   </div>
   <div id="overlay">
-    <h1>👨‍🍳 3D 廚師帽</h1>
-    <p>把臉放到鏡頭前，頭上會戴上一頂 3D 廚師帽。<br>轉頭、仰頭、歪頭，帽子都會跟著動。</p>
+    <h1>👨‍🍳 大廚炒菜 3D</h1>
+    <p>把臉和手放到鏡頭前，頭上會戴上 3D 廚師帽。<br>蔬果會從上方飄落，用手握住它們，<br>食材會化成光飛進平底鍋，大火快炒 3 秒！</p>
     <button id="start">開啟鏡頭</button>
     <p id="err"></p>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const glCanvas = document.getElementById('gl');
     const statusEl = document.getElementById('status');
+    const scoreEl = document.getElementById('score');
     const overlay = document.getElementById('overlay');
     const errEl = document.getElementById('err');
     const showCam = document.getElementById('showCam');
+    const showHands = document.getElementById('showHands');
 
-    let W = 0, H = 0, dpr = 1;
+    let W = 0, H = 0, U = 1;
     let view = { x: 0, y: 0, w: 0, h: 0 };
     let mirror = true, facing = 'user', stream = null;
+    let score = 0;
 
     // ---------- 畫布 / 鏡頭配置 ----------
     function resize() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       W = canvas.width = Math.round(window.innerWidth * dpr);
       H = canvas.height = Math.round(window.innerHeight * dpr);
+      U = Math.min(W, H) / 400;
       layoutVideo();
       setupThreeSize();
+      placePan();
     }
     function layoutVideo() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh) { view = { x: 0, y: 0, w: W, h: H }; return; }
-      const s = Math.min(W / vw, H / vh);   // 像相機 App：保持比例、填滿寬或高、其餘留黑
+      const s = Math.min(W / vw, H / vh);
       view.w = vw * s; view.h = vh * s;
       view.x = (W - view.w) / 2; view.y = (H - view.h) / 2;
     }
     const toScreen = p => ({ x: view.x + (mirror ? 1 - p.x : p.x) * view.w, y: view.y + p.y * view.h });
+    const s2t = (sx, sy, z = 0) => new THREE.Vector3(sx - W / 2, H / 2 - sy, z);   // 螢幕 → three
 
-    // ---------- three.js 場景 ----------
+    // ---------- three.js ----------
     const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, alpha: true, antialias: true });
     renderer.setClearColor(0x000000, 0);
     const scene = new THREE.Scene();
-    // 正交相機，座標直接對應螢幕像素：(0,0) 在中心，x 向右，y 向上
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -5000, 5000);
     camera.position.z = 1000;
     function setupThreeSize() {
-      renderer.setPixelRatio(1);
-      renderer.setSize(W, H, false);
+      renderer.setPixelRatio(1); renderer.setSize(W, H, false);
       camera.left = -W / 2; camera.right = W / 2; camera.top = H / 2; camera.bottom = -H / 2;
       camera.updateProjectionMatrix();
     }
     scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.9));
     const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(0.4, 1, 1); scene.add(sun);
     const rim = new THREE.DirectionalLight(0xdde8ff, 0.35); rim.position.set(-0.6, 0.3, -1); scene.add(rim);
+    const fireLight = new THREE.PointLight(0xff7a20, 0, 600); scene.add(fireLight);
 
-    // 廚師帽：單位 1 = 頭寬（兩耳距離）。帽底 y=0 在髮際線，+y 向上，+z 朝前(臉的方向)
+    // 圓形漸層貼圖（粒子用）
+    function makeDotTexture() {
+      const c = document.createElement('canvas'); c.width = c.height = 64;
+      const g = c.getContext('2d'); const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.4, 'rgba(255,255,255,.6)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+      return new THREE.CanvasTexture(c);
+    }
+    const dotTex = makeDotTexture();
+
+    // ---------- 廚師帽 ----------
     function buildHat() {
       const group = new THREE.Group();
-      // 帽子外形剖面（半徑, 高度）
-      const profile = [];
-      const pts = [
-        [0.50, 0.00], [0.52, 0.10], [0.52, 0.34],   // 帽帶
-        [0.54, 0.40], [0.62, 0.55], [0.68, 0.80], [0.70, 1.05], [0.68, 1.28],
-        [0.60, 1.42], [0.45, 1.50], [0.25, 1.53], [0.0, 1.54]
-      ];
-      for (const [r, y] of pts) profile.push(new THREE.Vector2(r, y));
-      const geo = new THREE.LatheGeometry(profile, 96);
-      // 加上皺褶：帽身區域半徑隨角度起伏
+      const pts = [[0.50, 0.00], [0.52, 0.10], [0.52, 0.34], [0.54, 0.40], [0.62, 0.55], [0.68, 0.80], [0.70, 1.05], [0.68, 1.28],
+        [0.60, 1.42], [0.45, 1.50], [0.25, 1.53], [0.0, 1.54]];
+      const geo = new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 96);
       const pos = geo.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -119,96 +132,326 @@
         pos.setXYZ(i, Math.cos(th) * nr, y, Math.sin(th) * nr);
       }
       geo.computeVertexNormals();
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, metalness: 0.0 });
-      const hat = new THREE.Mesh(geo, mat);
-      group.add(hat);
-      // 帽帶（稍微不同色，像布邊）
+      group.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 })));
       const band = new THREE.Mesh(new THREE.CylinderGeometry(0.535, 0.525, 0.34, 96, 1, true),
         new THREE.MeshStandardMaterial({ color: 0xf3f3f3, roughness: 0.9, side: THREE.DoubleSide }));
       band.position.y = 0.17; group.add(band);
-      // 帽底封口（避免仰頭時看到裡面是空的）
       const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.5, 64),
         new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 1, side: THREE.DoubleSide }));
       bottom.rotation.x = Math.PI / 2; bottom.position.y = 0.005; group.add(bottom);
-      // 看不見的「頭」：用來遮住帽子被頭擋住的部分
-      const occluder = new THREE.Mesh(new THREE.SphereGeometry(0.5, 48, 32),
-        new THREE.MeshBasicMaterial({ colorWrite: false }));
-      occluder.position.y = -0.5; occluder.scale.set(1, 1.15, 1); occluder.renderOrder = -1;
-      group.add(occluder);
+      const occluder = new THREE.Mesh(new THREE.SphereGeometry(0.5, 48, 32), new THREE.MeshBasicMaterial({ colorWrite: false }));
+      occluder.position.y = -0.5; occluder.scale.set(1, 1.15, 1); occluder.renderOrder = -1; group.add(occluder);
       return group;
     }
-    const hat = buildHat();
-    hat.visible = false;
-    scene.add(hat);
+    const hat = buildHat(); hat.visible = false; scene.add(hat);
 
-    // ---------- 從臉部網格算出頭部姿態 ----------
     const smooth = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), scale: 1, ok: false };
     const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion();
-    function lm3(p) {   // 轉成 three 的座標：x 向右、y 向上、z 朝鏡頭
-      const s = toScreen(p);
-      return new THREE.Vector3(s.x - W / 2, H / 2 - s.y, -p.z * view.w);
-    }
+    function lm3(p) { const s = toScreen(p); return new THREE.Vector3(s.x - W / 2, H / 2 - s.y, -p.z * view.w); }
     function updateHat(lms) {
-      // 468 點中的關鍵位置
-      const rEar = lm3(lms[234]), lEar = lm3(lms[454]);
-      const chin = lm3(lms[152]), forehead = lm3(lms[10]);
-      const rEye = lm3(lms[33]), lEye = lm3(lms[263]);
+      const rEar = lm3(lms[234]), lEar = lm3(lms[454]), chin = lm3(lms[152]), forehead = lm3(lms[10]);
       const earMid = rEar.clone().add(lEar).multiplyScalar(0.5);
       const headW = rEar.distanceTo(lEar);
-
-      // 建立頭部的三軸：右(耳到耳)、上(下巴到額頭)、前(叉積)
-      // 螢幕座標已含鏡像，z 朝鏡頭為正，所以直接用叉積即可得到正確方向
-      let right = lEar.clone().sub(rEar);
-      if (right.x < 0) right.negate();       // 保證「右」指向螢幕右邊
-      right.normalize();
+      let right = lEar.clone().sub(rEar); if (right.x < 0) right.negate(); right.normalize();
       let up = forehead.clone().sub(chin).normalize();
       const front = new THREE.Vector3().crossVectors(right, up).normalize();
       up = new THREE.Vector3().crossVectors(front, right).normalize();
-      tmpM.makeBasis(right, up, front);
-      tmpQ.setFromRotationMatrix(tmpM);
-
-      // 帽子位置：從兩耳中點沿著「上」方向移到髮際線（約 0.36 頭寬，仰頭時額頭露更多要再高一點）
-      const upWorld = up.clone();
-      const pitch = front.y;                 // 仰頭時 front 朝上 (>0)
-      const off = headW * (0.34 + 0.12 * Math.max(0, pitch));
-      const pos = earMid.clone().add(upWorld.multiplyScalar(off));
-      // 帽子比頭稍微大一點點才蓋得住頭髮
-      const scale = headW * 0.98;
-
+      tmpM.makeBasis(right, up, front); tmpQ.setFromRotationMatrix(tmpM);
+      const pitch = front.y;
+      // 帽子更大、更低一點：確實把頭髮蓋住
+      const off = headW * (0.28 + 0.12 * Math.max(0, pitch));
+      const pos = earMid.clone().add(up.clone().multiplyScalar(off));
+      const scale = headW * 1.15;
       if (!smooth.ok) { smooth.pos.copy(pos); smooth.quat.copy(tmpQ); smooth.scale = scale; smooth.ok = true; }
       else { smooth.pos.lerp(pos, 0.45); smooth.quat.slerp(tmpQ, 0.45); smooth.scale += (scale - smooth.scale) * 0.45; }
-      hat.position.copy(smooth.pos);
-      hat.quaternion.copy(smooth.quat);
-      hat.scale.setScalar(smooth.scale);
-      hat.visible = true;
+      hat.position.copy(smooth.pos); hat.quaternion.copy(smooth.quat); hat.scale.setScalar(smooth.scale); hat.visible = true;
     }
 
-    // ---------- 主繪製 ----------
-    let lastSeen = 0;
-    function onResults(results) {
+    // ---------- 蔬果模型 ----------
+    const mat = (c, r = 0.6) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
+    const PRODUCE = [
+      { name: '番茄', color: 0xe63946, build: () => { const g = new THREE.Group();
+          g.add(new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), mat(0xe63946, 0.35)));
+          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.5, 8), mat(0x3a7d34)); st.position.y = 1.05; g.add(st);
+          return g; } },
+      { name: '橘子', color: 0xff8c1a, build: () => new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), mat(0xff8c1a, 0.85)) },
+      { name: '檸檬', color: 0xffe14d, build: () => { const m = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), mat(0xffe14d, 0.7)); m.scale.set(1.25, 0.9, 0.9); return m; } },
+      { name: '紅蘿蔔', color: 0xff7a1a, build: () => { const g = new THREE.Group();
+          const c = new THREE.Mesh(new THREE.ConeGeometry(0.55, 2.4, 16), mat(0xff7a1a, 0.7)); c.rotation.x = Math.PI; g.add(c);
+          const lf = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 8), mat(0x3fa34d)); lf.position.y = 1.5; g.add(lf); return g; } },
+      { name: '茄子', color: 0x6a2c91, build: () => { const m = new THREE.Mesh(new THREE.CapsuleGeometry ? new THREE.SphereGeometry(1, 24, 18) : new THREE.SphereGeometry(1, 24, 18), mat(0x6a2c91, 0.4)); m.scale.set(0.7, 1.3, 0.7); return m; } },
+      { name: '青花菜', color: 0x2f9e44, build: () => { const g = new THREE.Group();
+          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.35, 1.2, 10), mat(0xa8d08d)); st.position.y = -0.6; g.add(st);
+          for (let i = 0; i < 6; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 10), mat(0x2f9e44, 0.95));
+            const a = i / 6 * Math.PI * 2; b.position.set(Math.cos(a) * 0.5, 0.2 + Math.random() * 0.2, Math.sin(a) * 0.5); g.add(b); }
+          g.add(new THREE.Mesh(new THREE.SphereGeometry(0.6, 14, 10), mat(0x2f9e44, 0.95))).position.y = 0.45; return g; } },
+      { name: '蘋果', color: 0xd7263d, build: () => { const g = new THREE.Group();
+          const a = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), mat(0xd7263d, 0.3)); a.scale.y = 0.92; g.add(a);
+          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.5, 8), mat(0x5b3a1e)); st.position.y = 1.0; g.add(st); return g; } },
+      { name: '香菇', color: 0xb5803f, build: () => { const g = new THREE.Group();
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xb5803f, 0.8)); cap.scale.y = 0.7; g.add(cap);
+          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.4, 1.1, 10), mat(0xf3e9d2)); st.position.y = -0.5; g.add(st); return g; } },
+      { name: '玉米', color: 0xffd23f, build: () => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.35, 2.4, 14), mat(0xffd23f, 0.6)); return m; } },
+    ];
+
+    // ---------- 平底鍋 ----------
+    const pan = { group: null, R: 0, baseX: 0, baseY: 0, cookUntil: 0, inner: [], t: 0 };
+    function buildPan() {
+      const g = new THREE.Group();
+      const R = 1;
+      const profile = [[0, 0], [0.78, 0], [0.86, 0.04], [0.98, 0.26], [1.0, 0.32], [0.94, 0.34], [0.92, 0.3], [0.8, 0.09], [0, 0.06]];
+      const body = new THREE.Mesh(new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 64),
+        new THREE.MeshStandardMaterial({ color: 0x3b3f46, roughness: 0.45, metalness: 0.6, side: THREE.DoubleSide }));
+      g.add(body);
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 1.5, 12), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 }));
+      handle.rotation.z = Math.PI / 2 + 0.12; handle.position.set(-1.65, 0.36, 0); g.add(handle);
+      const joint = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.28), new THREE.MeshStandardMaterial({ color: 0x555a63, metalness: 0.7, roughness: 0.4 }));
+      joint.position.set(-1.0, 0.3, 0); g.add(joint);
+      // 鍋裡的油光
+      const oil = new THREE.Mesh(new THREE.CircleGeometry(0.72, 48), new THREE.MeshStandardMaterial({ color: 0x8a7a40, roughness: 0.15, metalness: 0.3, transparent: true, opacity: 0.55 }));
+      oil.rotation.x = -Math.PI / 2; oil.position.y = 0.07; g.add(oil);
+      g.rotation.x = -0.55;   // 稍微俯視看得到鍋內
+      return g;
+    }
+    pan.group = buildPan(); scene.add(pan.group);
+    function placePan() {
+      pan.R = 60 * U;
+      const bottom = view.h ? Math.min(view.y + view.h, H) : H;
+      pan.baseX = 0; pan.baseY = (H / 2 - bottom) + pan.R * 1.05;
+      pan.group.position.set(pan.baseX, pan.baseY, 50);
+      pan.group.scale.setScalar(pan.R);
+    }
+    // 加一顆菜到鍋裡
+    function addToPan(type) {
+      const m = type.build(); m.scale.setScalar(0.16 + Math.random() * 0.05);
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 0.55;
+      m.position.set(Math.cos(a) * r, 0.1, Math.sin(a) * r);
+      m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+      m.userData = { z: 0, vz: 0, bx: m.position.x, bz: m.position.z, vr: 0 };
+      pan.group.add(m); pan.inner.push(m);
+      if (pan.inner.length > 12) { const old = pan.inner.shift(); pan.group.remove(old); }
+    }
+
+    // ---------- 粒子系統（火焰 / 蒸氣 / 消失特效 / 光的尾巴） ----------
+    function makeParticles(max, color, size, blending, opacity = 1) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+      const m = new THREE.PointsMaterial({ size, map: dotTex, transparent: true, depthWrite: false, blending, vertexColors: true, opacity, sizeAttenuation: false });
+      const pts = new THREE.Points(geo, m); pts.frustumCulled = false; scene.add(pts);
+      return { pts, geo, max, list: [] };
+    }
+    const fireSys = makeParticles(600, 0xffffff, 26 * U, THREE.AdditiveBlending);
+    const steamSys = makeParticles(300, 0xffffff, 44 * U, THREE.AdditiveBlending, 0.7);
+    const sparkSys = makeParticles(600, 0xffffff, 14 * U, THREE.AdditiveBlending);
+    function flushParticles(sys) {
+      const p = sys.geo.attributes.position.array, c = sys.geo.attributes.color.array;
+      let n = 0;
+      for (const q of sys.list) { if (n >= sys.max) break;
+        p[n * 3] = q.x; p[n * 3 + 1] = q.y; p[n * 3 + 2] = q.z;
+        c[n * 3] = q.r * q.a; c[n * 3 + 1] = q.g * q.a; c[n * 3 + 2] = q.b * q.a; n++; }
+      sys.geo.setDrawRange(0, n);
+      sys.geo.attributes.position.needsUpdate = true; sys.geo.attributes.color.needsUpdate = true;
+    }
+
+    // ---------- 掉落的蔬果 ----------
+    const falling = [];
+    let spawnTimer = 0;
+    function spawnProduce() {
+      const type = PRODUCE[Math.floor(Math.random() * PRODUCE.length)];
+      const m = type.build();
+      const size = (16 + Math.random() * 8) * U;
+      m.scale.setScalar(size);
+      const left = view.x + size * 1.5, right = view.x + view.w - size * 1.5;
+      const sx = left + Math.random() * (right - left);
+      m.position.set(sx - W / 2, H / 2 + size * 2, 120);
+      m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      m.userData = { type, size, vy: -(70 + Math.random() * 50) * U, sway: Math.random() * Math.PI * 2, swayAmp: (8 + Math.random() * 12) * U,
+        rx: (Math.random() - .5) * 1.5, ry: (Math.random() - .5) * 1.5, baseX: sx - W / 2 };
+      scene.add(m); falling.push(m);
+    }
+
+    // ---------- 光飛進鍋裡 ----------
+    const lights = [];
+    function launchLight(from, type) {
+      const orb = new THREE.Mesh(new THREE.SphereGeometry(7 * U, 12, 10), new THREE.MeshBasicMaterial({ color: type.color }));
+      orb.position.copy(from); scene.add(orb);
+      const to = new THREE.Vector3(pan.baseX, pan.baseY + pan.R * 0.25, 200);
+      const ctrl = from.clone().lerp(to, 0.5); ctrl.y += 120 * U; ctrl.x += (Math.random() - .5) * 120 * U;
+      lights.push({ orb, from: from.clone(), ctrl, to, t: 0, type, col: new THREE.Color(type.color) });
+    }
+
+    // 消失特效：碎片噴散
+    function burst(pos, colorHex, n = 40) {
+      const col = new THREE.Color(colorHex);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, sp = (60 + Math.random() * 160) * U;
+        sparkSys.list.push({ x: pos.x, y: pos.y, z: pos.z + 5, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp + 60 * U, vz: 0,
+          life: 1, decay: 1.6 + Math.random() * 1.2, r: col.r, g: col.g, b: col.b, a: 1 });
+      }
+    }
+
+    // ---------- 手部 ----------
+    const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+      [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+    function palmCenter(lm) { const ids = [0, 5, 9, 13, 17]; let x = 0, y = 0;
+      for (const i of ids) { x += lm[i].x; y += lm[i].y; } return toScreen({ x: x / ids.length, y: y / ids.length }); }
+    function isClosed(lm) { const w = lm[0], d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const tips = [8, 12, 16, 20], bases = [5, 9, 13, 17]; let s = 0;
+      for (let i = 0; i < 4; i++) s += d(lm[tips[i]], w) / (d(lm[bases[i]], w) + 1e-6); return s / 4 < 1.5; }
+    function drawHand(lm, color) {
+      ctx.lineWidth = 3 * U; ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineCap = 'round';
+      for (const [a, b] of CONNECTIONS) { const p = toScreen(lm[a]), q = toScreen(lm[b]); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+      ctx.fillStyle = color;
+      for (let i = 0; i < 21; i++) { const p = toScreen(lm[i]); ctx.beginPath(); ctx.arc(p.x, p.y, 4 * U, 0, Math.PI * 2); ctx.fill(); }
+    }
+
+    // ---------- 主更新 ----------
+    let faceResult = null, handsResult = null, lastFace = 0, lastT = performance.now();
+    function frameUpdate() {
+      const now = performance.now(); const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+
+      // 影像
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-      if (showCam.checked) {
+      const img = handsResult && handsResult.image;
+      if (showCam.checked && img) {
         ctx.save();
-        if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(results.image, W - view.x - view.w, view.y, view.w, view.h); }
-        else ctx.drawImage(results.image, view.x, view.y, view.w, view.h);
+        if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(img, W - view.x - view.w, view.y, view.w, view.h); }
+        else ctx.drawImage(img, view.x, view.y, view.w, view.h);
         ctx.restore();
       }
-      const faces = results.multiFaceLandmarks;
-      if (faces && faces.length) { updateHat(faces[0]); lastSeen = performance.now(); statusEl.textContent = '👨‍🍳 大廚上線'; }
-      else if (performance.now() - lastSeen > 500) { hat.visible = false; smooth.ok = false; statusEl.textContent = '找不到臉'; }
+      // 帽子
+      const faces = faceResult && faceResult.multiFaceLandmarks;
+      if (faces && faces.length) { updateHat(faces[0]); lastFace = now; }
+      else if (now - lastFace > 500) { hat.visible = false; smooth.ok = false; }
+
+      // 手
+      const hands = [];
+      if (handsResult && handsResult.multiHandLandmarks) handsResult.multiHandLandmarks.forEach(lm => {
+        const h = { palm: palmCenter(lm), closed: isClosed(lm), lm }; hands.push(h);
+        if (showHands.checked) drawHand(lm, h.closed ? '#fbbf24' : '#4ade80');
+      });
+
+      // 生成蔬果
+      spawnTimer -= dt;
+      if (spawnTimer <= 0 && falling.length < 6) { spawnProduce(); spawnTimer = 1.0 + Math.random() * 1.2; }
+
+      // 蔬果掉落 + 抓取
+      const bottomY = -(H / 2) - 60 * U;
+      for (let i = falling.length - 1; i >= 0; i--) {
+        const m = falling[i], d = m.userData;
+        d.sway += dt * 2;
+        m.position.y += d.vy * dt;
+        m.position.x = d.baseX + Math.sin(d.sway) * d.swayAmp;
+        m.rotation.x += d.rx * dt; m.rotation.y += d.ry * dt;
+        // 抓取判定：握拳且手掌靠近
+        const sx = m.position.x + W / 2, sy = H / 2 - m.position.y;
+        let grabbed = false;
+        for (const h of hands) {
+          if (h.closed && Math.hypot(h.palm.x - sx, h.palm.y - sy) < d.size * 1.6 + 25 * U) { grabbed = true; break; }
+        }
+        if (grabbed) {
+          burst(m.position, d.type.color);
+          launchLight(m.position, d.type);
+          scene.remove(m); falling.splice(i, 1);
+          continue;
+        }
+        if (m.position.y < bottomY) { scene.remove(m); falling.splice(i, 1); }
+      }
+
+      // 光飛行
+      for (let i = lights.length - 1; i >= 0; i--) {
+        const L = lights[i]; L.t += dt / 0.55;
+        const t = Math.min(1, L.t), it = 1 - t;
+        const p = new THREE.Vector3(
+          it * it * L.from.x + 2 * it * t * L.ctrl.x + t * t * L.to.x,
+          it * it * L.from.y + 2 * it * t * L.ctrl.y + t * t * L.to.y, 200);
+        L.orb.position.copy(p);
+        for (let k = 0; k < 3; k++) sparkSys.list.push({ x: p.x + (Math.random() - .5) * 6 * U, y: p.y + (Math.random() - .5) * 6 * U, z: 190,
+          vx: (Math.random() - .5) * 30 * U, vy: (Math.random() - .5) * 30 * U, vz: 0, life: 1, decay: 3, r: L.col.r, g: L.col.g, b: L.col.b, a: 1 });
+        if (L.t >= 1) {
+          scene.remove(L.orb); lights.splice(i, 1);
+          addToPan(L.type);
+          burst(L.to, 0xffe08a, 30);
+          pan.cookUntil = now + 3000;
+          score++; scoreEl.textContent = '🍳 ' + score;
+        }
+      }
+
+      // 鍋子動畫
+      const cooking = now < pan.cookUntil;
+      const intensity = cooking ? 1 : 0.22;
+      pan.t += dt;
+      if (cooking) {
+        const k = pan.t * 13;
+        pan.group.rotation.z = Math.sin(k) * 0.16;
+        pan.group.position.y = pan.baseY + Math.abs(Math.sin(k * 0.5)) * 14 * U;
+        pan.group.position.x = pan.baseX + Math.sin(k) * 10 * U;
+        for (const v of pan.inner) { const u = v.userData;
+          if (u.z <= 0 && Math.random() < 0.08) { u.vz = 1.2 + Math.random() * 1.6; u.vr = (Math.random() - .5) * 8; }
+          u.vz -= 7 * dt; u.z = Math.max(0, u.z + u.vz * dt); if (u.z === 0) u.vz = 0;
+          v.position.y = 0.1 + u.z; v.rotation.y += u.vr * dt; u.vr *= 0.96; }
+      } else {
+        pan.group.rotation.z *= 0.85;
+        pan.group.position.y += (pan.baseY - pan.group.position.y) * 0.2;
+        pan.group.position.x += (pan.baseX - pan.group.position.x) * 0.2;
+        for (const v of pan.inner) { const u = v.userData; u.vz -= 7 * dt; u.z = Math.max(0, u.z + u.vz * dt); v.position.y = 0.1 + u.z; }
+      }
+
+      // 火焰
+      const fx = pan.group.position.x, fy = pan.group.position.y - pan.R * 0.15;
+      const nFire = Math.round(intensity * 14 + 2);
+      for (let i = 0; i < nFire; i++) {
+        const spread = pan.R * (0.7 + 0.3 * intensity);
+        fireSys.list.push({ x: fx + (Math.random() - .5) * spread * 2, y: fy + (Math.random() - .5) * pan.R * 0.15, z: 40,
+          vx: (Math.random() - .5) * 20 * U, vy: (60 + Math.random() * 80) * U * (0.6 + intensity * 0.9), vz: 0,
+          life: 1, decay: (1.6 + Math.random() * 1.2) * (cooking ? 1.5 : 1), r: 1, g: 0.75 + Math.random() * 0.2, b: 0.2, a: 1 });
+      }
+      for (let i = fireSys.list.length - 1; i >= 0; i--) { const q = fireSys.list[i];
+        q.life -= q.decay * dt; if (q.life <= 0) { fireSys.list.splice(i, 1); continue; }
+        q.x += (q.vx + Math.sin(now * 0.01 + i) * 15 * U) * dt; q.y += q.vy * dt;
+        const t = q.life; q.r = 1; q.g = t > 0.6 ? 0.85 : t > 0.3 ? 0.45 : 0.15; q.b = t > 0.6 ? 0.25 : 0.05; q.a = Math.min(1, t * 1.5) * (0.5 + intensity * 0.5); }
+      fireLight.position.set(fx, fy, 150); fireLight.intensity = 0.6 + intensity * 1.6;
+
+      // 蒸氣（炒菜時）
+      if (cooking && Math.random() < 0.9) {
+        for (let i = 0; i < 3; i++) steamSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.2, y: pan.group.position.y + pan.R * 0.3, z: 60,
+          vx: (Math.random() - .5) * 25 * U, vy: (40 + Math.random() * 40) * U, vz: 0, life: 1, decay: 0.45 + Math.random() * 0.3, r: 1, g: 1, b: 1, a: 0.6 });
+      }
+      for (let i = steamSys.list.length - 1; i >= 0; i--) { const q = steamSys.list[i];
+        q.life -= q.decay * dt; if (q.life <= 0) { steamSys.list.splice(i, 1); continue; }
+        q.x += (q.vx + Math.sin(now * 0.003 + i) * 12 * U) * dt; q.y += q.vy * dt; q.a = Math.sin(q.life * Math.PI) * 0.55; }
+
+      // 火花 / 碎片
+      for (let i = sparkSys.list.length - 1; i >= 0; i--) { const q = sparkSys.list[i];
+        q.life -= q.decay * dt; if (q.life <= 0) { sparkSys.list.splice(i, 1); continue; }
+        q.vy -= 250 * U * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.a = q.life; }
+
+      flushParticles(fireSys); flushParticles(steamSys); flushParticles(sparkSys);
       renderer.render(scene, camera);
+
+      statusEl.textContent = cooking ? '🔥 大火快炒！' : !hands.length ? (faces && faces.length ? '伸出手來抓蔬果' : '找不到臉和手') : '握拳抓住飄落的蔬果';
+      statusEl.style.color = cooking ? '#ff8c42' : '#fff';
     }
 
+    // ---------- MediaPipe ----------
     const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
     faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-    faceMesh.onResults(onResults);
+    faceMesh.onResults(r => { faceResult = r; });
+    const handsMP = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    handsMP.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+    handsMP.onResults(r => { handsResult = r; });
 
-    let running = false, busy = false;
+    let running = false, busy = false, tick = 0;
     async function loop() {
       if (!running) return;
       if (video.readyState >= 2 && !busy) {
         busy = true;
-        try { await faceMesh.send({ image: video }); } finally { busy = false; }
+        try {
+          if (tick++ % 2 === 0) await faceMesh.send({ image: video });
+          await handsMP.send({ image: video });
+        } catch (e) {} finally { busy = false; }
+        frameUpdate();
       }
       requestAnimationFrame(loop);
     }
@@ -220,8 +463,7 @@
         video: portrait
           ? { facingMode: facing, width: { ideal: 1440 }, height: { ideal: 1920 }, aspectRatio: { ideal: 3 / 4 } }
           : { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 } },
-        audio: false
-      });
+        audio: false });
       mirror = facing === 'user';
       video.srcObject = stream;
       await new Promise(r => video.onloadedmetadata = r);
@@ -229,16 +471,12 @@
       const track = stream.getVideoTracks()[0];
       try { const caps = track.getCapabilities ? track.getCapabilities() : {};
         if (caps.zoom) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] }); } catch (e) {}
-      layoutVideo();
+      layoutVideo(); placePan();
     }
-
     document.getElementById('start').addEventListener('click', async () => {
       errEl.textContent = '';
-      try {
-        await startCamera(); resize();
-        overlay.classList.add('hidden');
-        statusEl.textContent = '載入模型中…';
-        running = true; loop();
+      try { await startCamera(); resize(); overlay.classList.add('hidden'); statusEl.textContent = '載入模型中…';
+        running = true; lastT = performance.now(); loop();
         if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
       } catch (e) { errEl.textContent = '無法開啟鏡頭：' + (e.message || e); }
     });
@@ -249,7 +487,7 @@
     window.addEventListener('resize', resize);
     if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(async () => {
       if (running) { try { await startCamera(); } catch (e) {} } resize(); }, 300));
-    video.addEventListener('resize', layoutVideo);
+    video.addEventListener('resize', () => { layoutVideo(); placePan(); });
     resize();
   </script>
 </body>
