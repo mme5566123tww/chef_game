@@ -229,14 +229,20 @@
       const bb = det.boundingBox;
       const c = toScreen({ x: bb.xCenter, y: bb.yCenter });
       const w = bb.width * view.w, h = bb.height * view.h;
-      let ang = 0;
-      const kp = det.landmarks;
-      if (kp && kp.length >= 2) {
-        const r = toScreen(kp[0]), l = toScreen(kp[1]);
-        ang = Math.atan2(l.y - r.y, l.x - r.x);
+      // 關鍵點：0 右眼、1 左眼、2 鼻、3 嘴、4 右耳、5 左耳
+      const kp = det.landmarks || [];
+      let ang = 0, cx = c.x, eyeY = c.y - h * 0.15, earDist = w * 1.1;
+      if (kp.length >= 6) {
+        const rEye = toScreen(kp[0]), lEye = toScreen(kp[1]);
+        const rEar = toScreen(kp[4]), lEar = toScreen(kp[5]);
+        ang = Math.atan2(lEye.y - rEye.y, lEye.x - rEye.x);
         if (Math.abs(ang) > Math.PI / 2) ang += ang > 0 ? -Math.PI : Math.PI;
+        cx = (rEar.x + lEar.x) / 2;
+        eyeY = (rEye.y + lEye.y) / 2;
+        earDist = Math.hypot(lEar.x - rEar.x, lEar.y - rEar.y);
       }
-      const target = { x: c.x, y: c.y - h * 0.48, w: w * 0.92, ang };   // 帽寬不超過頭寬
+      // 帽寬 = 兩耳距離的 94%（耳朵以內一點）；帽底放在髮際線，把頭髮蓋住
+      const target = { x: cx, y: eyeY - earDist * 0.42, w: earDist * 0.94, ang };
       if (!hatSmooth) hatSmooth = target;
       else { hatSmooth.x += (target.x - hatSmooth.x) * 0.4; hatSmooth.y += (target.y - hatSmooth.y) * 0.4;
              hatSmooth.w += (target.w - hatSmooth.w) * 0.4; hatSmooth.ang += (target.ang - hatSmooth.ang) * 0.4; }
@@ -245,7 +251,7 @@
       ctx.translate(hatSmooth.x, hatSmooth.y);
       ctx.rotate(hatSmooth.ang);
       // 帽子底邊放在額頭上方，稍微蓋住一點頭頂
-      ctx.drawImage(hatImg, -hw / 2, -hh + hh * 0.08, hw, hh);
+      ctx.drawImage(hatImg, -hw / 2, -hh + hh * 0.12, hw, hh);
       ctx.restore();
     }
 
