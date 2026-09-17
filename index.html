@@ -236,7 +236,7 @@
         ang = Math.atan2(l.y - r.y, l.x - r.x);
         if (Math.abs(ang) > Math.PI / 2) ang += ang > 0 ? -Math.PI : Math.PI;
       }
-      const target = { x: c.x, y: c.y - h * 0.5, w: w * 1.25, ang };
+      const target = { x: c.x, y: c.y - h * 0.48, w: w * 0.92, ang };   // 帽寬不超過頭寬
       if (!hatSmooth) hatSmooth = target;
       else { hatSmooth.x += (target.x - hatSmooth.x) * 0.4; hatSmooth.y += (target.y - hatSmooth.y) * 0.4;
              hatSmooth.w += (target.w - hatSmooth.w) * 0.4; hatSmooth.ang += (target.ang - hatSmooth.ang) * 0.4; }
@@ -366,11 +366,12 @@
 
     async function startCamera() {
       if (stream) stream.getTracks().forEach(t => t.stop());
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const sw = Math.round(window.innerWidth * dpr), sh = Math.round(window.innerHeight * dpr);
-      // 依螢幕方向要求對應比例：手機直拿就要求直式影像
+      // 手機直拿：要求 3:4 直式 4:3 影像（跟相機 App 一樣）；橫式裝置要求 4:3 橫式
+      const portrait = window.innerHeight > window.innerWidth;
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing, width: { ideal: sw }, height: { ideal: sh }, aspectRatio: { ideal: sw / sh } },
+        video: portrait
+          ? { facingMode: facing, width: { ideal: 1440 }, height: { ideal: 1920 }, aspectRatio: { ideal: 3 / 4 } }
+          : { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 } },
         audio: false
       });
       mirror = facing === 'user';
