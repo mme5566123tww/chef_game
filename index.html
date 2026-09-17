@@ -315,7 +315,7 @@
         a *= smoothstep(0.0, 0.06, uv.y);                            // 底部淡入
         gl_FragColor = vec4(col * a, a);
       }`;
-    const FLAME_N = 4;
+    const FLAME_N = 3;
     const flames = [];
     for (let i = 0; i < FLAME_N; i++) {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
@@ -326,15 +326,16 @@
       scene.add(m); flames.push(m);
     }
     function updateFlames(now, intensity, cooking, dt) {
-      const px = pan.group.position.x, py = pan.group.position.y - pan.R * 0.62;
-      const span = pan.R * 1.5, heat = cooking ? 1 : 0;
+      // 固定在鍋子的原始位置，炒菜時鍋子晃、火不動；z 放很後面，確保整個鍋子都在火前面
+      const px = pan.baseX, py = pan.baseY - pan.R * 0.75;
+      const span = pan.R * 0.95, heat = cooking ? 1 : 0;   // 三朵稍微重疊
       for (let i = 0; i < FLAME_N; i++) {
         const f = flames[i], u = f.material.uniforms;
         u.uTime.value = now / 1000; u.uHeat.value += (heat - u.uHeat.value) * 0.08;
         const k = (i - (FLAME_N - 1) / 2) / (FLAME_N - 1);
-        const edge = 1 - Math.abs(k) * 0.5;   // 中間高、兩側矮
-        const h = pan.R * (0.55 + 0.75 * intensity) * edge, w = pan.R * 0.62;
-        f.position.set(px + k * span, py, 20);    // 火焰在平底鍋後面
+        const edge = 1 - Math.abs(k) * 0.35;
+        const h = pan.R * (0.7 + 0.8 * intensity) * edge, w = pan.R * 0.75;
+        f.position.set(px + k * span, py, -150);
         f.scale.set(w, h, 1);
       }
     }
@@ -515,10 +516,10 @@
 
       // 火焰（卡通風）+ 飛散的小火星
       updateFlames(now, intensity, cooking, dt);
-      const fx = pan.group.position.x, fy = pan.group.position.y - pan.R * 0.55;
+      const fx = pan.baseX, fy = pan.baseY - pan.R * 0.6;
       const nEmber = cooking ? 4 : 1;
       for (let i = 0; i < nEmber; i++) if (Math.random() < 0.7) {
-        fireSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.8, y: fy + Math.random() * pan.R * 0.4, z: 22,
+        fireSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.8, y: fy + Math.random() * pan.R * 0.4, z: -148,
           vx: (Math.random() - .5) * 50 * U, vy: (90 + Math.random() * 120) * U * (0.7 + intensity), vz: 0,
           life: 1, decay: 1.2 + Math.random() * 1.2, r: 1, g: 0.6, b: 0.1, a: 1, s: 0.25 + Math.random() * 0.3 });
       }
