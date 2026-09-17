@@ -77,7 +77,8 @@
     function layoutVideo() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh) { view = { x: 0, y: 0, w: W, h: H }; return; }
-      const s = Math.max(W / vw, H / vh);   // 永遠填滿整個螢幕
+      // 像相機 App：保持鏡頭原始比例，填滿寬度（直式）或高度（橫式），其餘留黑
+      const s = Math.min(W / vw, H / vh);
       view.w = vw * s; view.h = vh * s;
       view.x = (W - view.w) / 2; view.y = (H - view.h) / 2;
     }
@@ -105,7 +106,8 @@
       pan.handleLen = 62 * U; pan.r = 46 * U;
       pan.restAng = 0;
       // 鍋身置於畫面中央偏下：握點 = 中心往左移 handleLen + r
-      pan.restX = W / 2 - (pan.handleLen + pan.r); pan.restY = H * 0.58;
+      pan.restX = W / 2 - (pan.handleLen + pan.r);
+      pan.restY = (view.h ? view.y + view.h * 0.72 : H * 0.6);
       if (pan.heldBy < 0) { pan.x = pan.restX; pan.y = pan.restY; pan.ang = 0; }
       if (!veggies.length) {
         VEG.forEach(v => veggies.push({ ...v, ox: (Math.random() - .5) * pan.r * 1.1, oy: (Math.random() - .5) * pan.r * 1.1,
@@ -381,7 +383,7 @@
         const caps = track.getCapabilities ? track.getCapabilities() : {};
         if (caps.zoom) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
       } catch (e) {}
-      layoutVideo();
+      layoutVideo(); placeStove();
     }
 
     document.getElementById('start').addEventListener('click', async () => {
@@ -406,7 +408,7 @@
       if (running) { try { await startCamera(); } catch (e) {} }
       resize();
     }, 300));
-    video.addEventListener('resize', () => { layoutVideo(); });
+    video.addEventListener('resize', () => { layoutVideo(); placeStove(); });
     resize();
   </script>
 </body>
