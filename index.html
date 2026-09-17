@@ -16,6 +16,8 @@
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
     display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;
     background: linear-gradient(to top, rgba(0,0,0,.6), rgba(0,0,0,0)); font-size: 14px; }
+  #bar button { font: inherit; font-weight: 600; color: #fff; background: rgba(255,255,255,.18);
+    border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 8px 14px; cursor: pointer; backdrop-filter: blur(6px); }
   #bar label { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px;
     background: rgba(0,0,0,.45); backdrop-filter: blur(6px); cursor: pointer; }
   #overlay { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center;
@@ -35,10 +37,11 @@
   <div id="bar">
     <label><input type="checkbox" id="showCam" checked> 鏡頭畫面</label>
     <label><input type="checkbox" id="showHands" checked> 顯示手部骨架</label>
+    <button id="flip">🔄 切換鏡頭</button>
   </div>
   <div id="overlay">
     <h1>👨‍🍳 大廚炒菜</h1>
-    <p>把臉和手放到鏡頭前，頭上會戴上廚師帽。<br>握拳抓住平底鍋的手柄就能拿起鍋子，<br>用力搖晃，爐火會變大、菜會在鍋裡翻飛！</p>
+    <p>把臉和手放到鏡頭前，頭上會戴上廚師帽。<br>握拳抓住平底鍋的手柄就能拿起鍋子，<br>用力搖晃，鍋子會噴出大火、菜會在鍋裡翻飛！</p>
     <button id="start">開啟鏡頭</button>
     <p id="err"></p>
   </div>
@@ -56,6 +59,9 @@
     const showHands = document.getElementById('showHands');
 
     let W = 0, H = 0, U = 1;                 // U：以最短邊為基準的尺寸單位
+    let mirror = true;                       // 前鏡頭鏡像，後鏡頭不鏡像
+    let facing = 'user';
+    let stream = null;
     let view = { x: 0, y: 0, w: 0, h: 0 };   // 鏡頭影像貼上的區域
     let frame = 0;
 
@@ -71,15 +77,13 @@
     function layoutVideo() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh) { view = { x: 0, y: 0, w: W, h: H }; return; }
-      const cover = Math.max(W / vw, H / vh), contain = Math.min(W / vw, H / vh);
-      const s = cover / contain <= 1.15 ? cover : contain;
+      const s = Math.max(W / vw, H / vh);   // 永遠填滿整個螢幕
       view.w = vw * s; view.h = vh * s;
       view.x = (W - view.w) / 2; view.y = (H - view.h) / 2;
     }
-    const toScreen = p => ({ x: view.x + (1 - p.x) * view.w, y: view.y + p.y * view.h });
+    const toScreen = p => ({ x: view.x + (mirror ? 1 - p.x : p.x) * view.w, y: view.y + p.y * view.h });
 
     // ---------- 炒台與平底鍋 ----------
-    const stove = { x: 0, y: 0, w: 0, h: 0, bx: 0, by: 0, br: 0 };  // b = 爐口
     const pan = {
       x: 0, y: 0,          // 手柄握點
       ang: 0,              // 鍋身方向（弧度）
@@ -98,13 +102,10 @@
       { c: '#ef476f', s: 'slice' }, { c: '#f8f4e3', s: 'cube' }    // 甜椒、洋蔥
     ];
     function placeStove() {
-      stove.w = 240 * U; stove.h = 90 * U;
-      stove.x = W / 2 - stove.w / 2; stove.y = H * 0.62;
-      stove.bx = W / 2; stove.by = stove.y + stove.h * 0.45; stove.br = 52 * U;
       pan.handleLen = 62 * U; pan.r = 46 * U;
       pan.restAng = 0;
-      // 讓鍋身正好在爐口上：握點 = 爐口中心往左移 handleLen + r
-      pan.restX = stove.bx - (pan.handleLen + pan.r); pan.restY = stove.by;
+      // 鍋身置於畫面中央偏下：握點 = 中心往左移 handleLen + r
+      pan.restX = W / 2 - (pan.handleLen + pan.r); pan.restY = H * 0.58;
       if (pan.heldBy < 0) { pan.x = pan.restX; pan.y = pan.restY; pan.ang = 0; }
       if (!veggies.length) {
         VEG.forEach(v => veggies.push({ ...v, ox: (Math.random() - .5) * pan.r * 1.1, oy: (Math.random() - .5) * pan.r * 1.1,
@@ -114,13 +115,16 @@
 
     // ---------- 火焰粒子 ----------
     const flames = [];
+    // 火焰從鍋身下方冒出（搖晃時大火）
     function spawnFlames(intensity) {
-      const n = Math.round(1 + intensity * 7);
+      if (intensity < 0.05) return;
+      const n = Math.round(intensity * 8);
+      const cx = pan.x + Math.cos(pan.ang) * (pan.handleLen + pan.r), cy = pan.y + Math.sin(pan.ang) * (pan.handleLen + pan.r);
       for (let i = 0; i < n; i++) {
-        const a = Math.random() * Math.PI * 2, rr = stove.br * (0.55 + Math.random() * 0.45);
+        const a = Math.random() * Math.PI * 2, rr = pan.r * (0.5 + Math.random() * 0.6);
         flames.push({
-          x: stove.bx + Math.cos(a) * rr, y: stove.by + Math.sin(a) * rr * 0.35,
-          vx: (Math.random() - .5) * 1.2 * U, vy: -(1.5 + Math.random() * 2.5 * (0.4 + intensity)) * U,
+          x: cx + Math.cos(a) * rr, y: cy + pan.r * 0.4 + Math.sin(a) * rr * 0.35,
+          vx: (Math.random() - .5) * 1.2 * U, vy: -(1.5 + Math.random() * 3 * (0.4 + intensity)) * U,
           life: 1, decay: 0.03 + Math.random() * 0.03,
           r: (5 + Math.random() * 6 * (0.5 + intensity)) * U
         });
@@ -139,29 +143,6 @@
       ctx.globalCompositeOperation = 'source-over';
     }
 
-    // ---------- 繪製炒台 ----------
-    function drawStove() {
-      const { x, y, w, h, bx, by, br } = stove;
-      // 台面
-      ctx.fillStyle = '#2b2f36';
-      roundRect(x, y, w, h, 14 * U); ctx.fill();
-      ctx.fillStyle = '#3a3f48'; roundRect(x + 6 * U, y + 6 * U, w - 12 * U, h - 12 * U, 10 * U); ctx.fill();
-      // 爐口
-      ctx.fillStyle = '#111';
-      ctx.beginPath(); ctx.ellipse(bx, by, br, br * 0.4, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#555'; ctx.lineWidth = 3 * U; ctx.stroke();
-      // 爐架
-      ctx.strokeStyle = '#888'; ctx.lineWidth = 3 * U;
-      for (let i = 0; i < 4; i++) {
-        const a = i * Math.PI / 2 + Math.PI / 4;
-        ctx.beginPath(); ctx.moveTo(bx + Math.cos(a) * br * 0.3, by + Math.sin(a) * br * 0.12);
-        ctx.lineTo(bx + Math.cos(a) * br, by + Math.sin(a) * br * 0.4); ctx.stroke();
-      }
-      // 旋鈕
-      ctx.fillStyle = '#c0392b';
-      ctx.beginPath(); ctx.arc(x + 30 * U, y + h - 22 * U, 9 * U, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + w - 30 * U, y + h - 22 * U, 9 * U, 0, Math.PI * 2); ctx.fill();
-    }
     function roundRect(x, y, w, h, r) {
       ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
       ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
@@ -295,8 +276,9 @@
       frame++;
       ctx.fillStyle = showCam.checked ? '#000' : '#14213d'; ctx.fillRect(0, 0, W, H);
       if (showCam.checked && handsResult) {
-        ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
-        ctx.drawImage(handsResult.image, W - view.x - view.w, view.y, view.w, view.h);
+        ctx.save();
+        if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(handsResult.image, W - view.x - view.w, view.y, view.w, view.h); }
+        else ctx.drawImage(handsResult.image, view.x, view.y, view.w, view.h);
         ctx.restore();
       }
       drawChefHat();
@@ -340,15 +322,13 @@
         }
         pan.prev = { x: hnd.palm.x, y: hnd.palm.y };
       } else {
-        // 放回炒台
+        // 放回原位
         pan.x += (pan.restX - pan.x) * 0.2; pan.y += (pan.restY - pan.y) * 0.2;
         let da = pan.restAng - pan.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); pan.ang += da * 0.2;
         pan.shake *= 0.85;
       }
 
-      // 爐火：平常小火，搖晃時大火
-      spawnFlames(0.08 + pan.shake);
-      drawStove();
+      spawnFlames(pan.shake);
       drawFlames();
       drawPan();
 
@@ -382,15 +362,32 @@
       requestAnimationFrame(loop);
     }
 
+    async function startCamera() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const sw = Math.round(window.innerWidth * dpr), sh = Math.round(window.innerHeight * dpr);
+      // 依螢幕方向要求對應比例：手機直拿就要求直式影像
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: sw }, height: { ideal: sh }, aspectRatio: { ideal: sw / sh } },
+        audio: false
+      });
+      mirror = facing === 'user';
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+      await video.play();
+      // 盡量拉到最廣角（0.5x）：若鏡頭支援 zoom，設成最小值
+      const track = stream.getVideoTracks()[0];
+      try {
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.zoom) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
+      } catch (e) {}
+      layoutVideo();
+    }
+
     document.getElementById('start').addEventListener('click', async () => {
       errEl.textContent = '';
       try {
-        const portrait = window.innerHeight > window.innerWidth;
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 } }, audio: false });
-        video.srcObject = stream;
-        await new Promise(r => video.onloadedmetadata = r);
-        await video.play();
+        await startCamera();
         resize();
         overlay.classList.add('hidden');
         statusEl.textContent = '載入模型中…';
@@ -399,8 +396,16 @@
       } catch (e) { errEl.textContent = '無法開啟鏡頭：' + (e.message || e); }
     });
 
+    document.getElementById('flip').addEventListener('click', async () => {
+      facing = facing === 'user' ? 'environment' : 'user';
+      try { await startCamera(); } catch (e) { facing = facing === 'user' ? 'environment' : 'user'; }
+    });
+
     window.addEventListener('resize', resize);
-    if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(resize, 300));
+    if (screen.orientation) screen.orientation.addEventListener('change', () => setTimeout(async () => {
+      if (running) { try { await startCamera(); } catch (e) {} }
+      resize();
+    }, 300));
     video.addEventListener('resize', () => { layoutVideo(); });
     resize();
   </script>
