@@ -334,7 +334,7 @@
         const k = (i - (FLAME_N - 1) / 2) / (FLAME_N - 1);
         const edge = 1 - Math.abs(k) * 0.5;   // 中間高、兩側矮
         const h = pan.R * (0.55 + 0.75 * intensity) * edge, w = pan.R * 0.62;
-        f.position.set(px + k * span, py, 120);
+        f.position.set(px + k * span, py, 20);    // 火焰在平底鍋後面
         f.scale.set(w, h, 1);
       }
     }
@@ -518,7 +518,7 @@
       const fx = pan.group.position.x, fy = pan.group.position.y - pan.R * 0.55;
       const nEmber = cooking ? 4 : 1;
       for (let i = 0; i < nEmber; i++) if (Math.random() < 0.7) {
-        fireSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.8, y: fy + Math.random() * pan.R * 0.4, z: 125,
+        fireSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.8, y: fy + Math.random() * pan.R * 0.4, z: 22,
           vx: (Math.random() - .5) * 50 * U, vy: (90 + Math.random() * 120) * U * (0.7 + intensity), vz: 0,
           life: 1, decay: 1.2 + Math.random() * 1.2, r: 1, g: 0.6, b: 0.1, a: 1, s: 0.25 + Math.random() * 0.3 });
       }
@@ -530,7 +530,7 @@
 
       // 蒸氣（炒菜時）
       if (cooking && Math.random() < 0.9) {
-        for (let i = 0; i < 3; i++) steamSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.2, y: pan.group.position.y + pan.R * 0.3, z: 60,
+        for (let i = 0; i < 3; i++) steamSys.list.push({ x: fx + (Math.random() - .5) * pan.R * 1.2, y: pan.group.position.y + pan.R * 0.3, z: 200,   // 白煙在最前面
           vx: (Math.random() - .5) * 25 * U, vy: (40 + Math.random() * 40) * U, vz: 0, life: 1, decay: 0.45 + Math.random() * 0.3, r: 1, g: 1, b: 1, a: 0.6 });
       }
       for (let i = steamSys.list.length - 1; i >= 0; i--) { const q = steamSys.list[i];
