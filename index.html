@@ -107,7 +107,9 @@
       pan.restAng = 0;
       // 鍋身置於畫面中央偏下：握點 = 中心往左移 handleLen + r
       pan.restX = W / 2 - (pan.handleLen + pan.r);
-      pan.restY = (view.h ? view.y + view.h * 0.72 : H * 0.6);
+      // 放在鏡頭畫面最底部（留一點邊，避免鍋身被切掉）
+      const bottom = view.h ? Math.min(view.y + view.h, H) : H;
+      pan.restY = bottom - pan.r * 0.9 - 8 * U;
       if (pan.heldBy < 0) { pan.x = pan.restX; pan.y = pan.restY; pan.ang = 0; }
       if (!veggies.length) {
         VEG.forEach(v => veggies.push({ ...v, ox: (Math.random() - .5) * pan.r * 1.1, oy: (Math.random() - .5) * pan.r * 1.1,
@@ -231,27 +233,43 @@
       const w = bb.width * view.w, h = bb.height * view.h;
       // 關鍵點：0 右眼、1 左眼、2 鼻、3 嘴、4 右耳、5 左耳
       const kp = det.landmarks || [];
-      let ang = 0, cx = c.x, eyeY = c.y - h * 0.15, earDist = w * 1.1;
+      let ang = 0, earMid = { x: c.x, y: c.y }, eyeMid = { x: c.x, y: c.y - h * 0.15 }, earDist = w * 1.1;
       if (kp.length >= 6) {
         const rEye = toScreen(kp[0]), lEye = toScreen(kp[1]);
         const rEar = toScreen(kp[4]), lEar = toScreen(kp[5]);
         ang = Math.atan2(lEye.y - rEye.y, lEye.x - rEye.x);
         if (Math.abs(ang) > Math.PI / 2) ang += ang > 0 ? -Math.PI : Math.PI;
-        cx = (rEar.x + lEar.x) / 2;
-        eyeY = (rEye.y + lEye.y) / 2;
+        earMid = { x: (rEar.x + lEar.x) / 2, y: (rEar.y + lEar.y) / 2 };
+        eyeMid = { x: (rEye.x + lEye.x) / 2, y: (rEye.y + lEye.y) / 2 };
         earDist = Math.hypot(lEar.x - rEar.x, lEar.y - rEar.y);
       }
-      // 帽寬 = 兩耳距離的 94%（耳朵以內一點）；帽底放在髮際線，把頭髮蓋住
-      const target = { x: cx, y: eyeY - earDist * 0.42, w: earDist * 0.94, ang };
+      // 頭的「上方」方向（隨歪頭旋轉），帽子沿著這個方向往上放，歪頭時才不會偏掉
+      const up = { x: Math.sin(ang), y: -Math.cos(ang) };
+      // 仰頭 / 低頭：眼睛相對耳朵沿著 up 方向的位移（仰頭時眼睛會比耳朵高）
+      const upOff = ((eyeMid.x - earMid.x) * up.x + (eyeMid.y - earMid.y) * up.y) / earDist;
+      let pitch = Math.max(-0.5, Math.min(0.9, (upOff - 0.06) * 3.2));   // >0 仰頭，<0 低頭
+      // 帽底放在髮際線：仰頭時額頭露更多，位置要更往上
+      const off = earDist * (0.42 + 0.22 * Math.max(0, pitch));
+      const target = { x: earMid.x + up.x * off, y: earMid.y + up.y * off, w: earDist * 0.94, ang, pitch };
       if (!hatSmooth) hatSmooth = target;
-      else { hatSmooth.x += (target.x - hatSmooth.x) * 0.4; hatSmooth.y += (target.y - hatSmooth.y) * 0.4;
-             hatSmooth.w += (target.w - hatSmooth.w) * 0.4; hatSmooth.ang += (target.ang - hatSmooth.ang) * 0.4; }
-      const hw = hatSmooth.w, hh = hw * HAT_RATIO;
+      else for (const k of ['x', 'y', 'w', 'ang', 'pitch']) hatSmooth[k] += (target[k] - hatSmooth[k]) * 0.4;
+
+      const hw = hatSmooth.w, hh = hw * HAT_RATIO, pt = hatSmooth.pitch;
       ctx.save();
       ctx.translate(hatSmooth.x, hatSmooth.y);
       ctx.rotate(hatSmooth.ang);
-      // 帽子底邊放在額頭上方，稍微蓋住一點頭頂
-      ctx.drawImage(hatImg, -hw / 2, -hh + hh * 0.12, hw, hh);
+      // 用水平切片做假 3D：仰頭時帽子往後倒（上方變窄、高度壓扁），低頭時相反
+      const N = 16, iw = hatImg.width, ih = hatImg.height;
+      const heightScale = 1 - 0.45 * pt;             // 仰頭壓扁、低頭拉長
+      const baseY = hh * 0.12;                        // 帽底稍微蓋住髮際線
+      for (let i = 0; i < N; i++) {
+        const t0 = i / N, t1 = (i + 1) / N;           // 0 = 帽底, 1 = 帽頂
+        const w0 = hw * (1 - 0.35 * pt * t0), w1 = hw * (1 - 0.35 * pt * t1);
+        const y0 = baseY - hh * t0 * heightScale, y1 = baseY - hh * t1 * heightScale;
+        const sy = ih * (1 - t1), sh = ih * (t1 - t0);
+        const dw = (w0 + w1) / 2, dh = (y0 - y1) + 0.6;   // +0.6 避免切片間出現細縫
+        ctx.drawImage(hatImg, 0, sy, iw, sh, -dw / 2, y1, dw, dh);
+      }
       ctx.restore();
     }
 
