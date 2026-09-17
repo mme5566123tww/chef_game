@@ -194,6 +194,9 @@
       { name: '玉米', color: 0xffd23f, build: () => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.35, 2.4, 14), mat(0xffd23f, 0.6)); return m; } },
     ];
 
+    PRODUCE.forEach(t => { t.template = t.build(); });   // 只建一次，之後用 clone 共用幾何體
+    const makeProduce = t => t.template.clone();
+
     // ---------- 平底鍋 ----------
     const pan = { group: null, R: 0, baseX: 0, baseY: 0, cookUntil: 0, inner: [], t: 0 };
     function buildPan() {
@@ -217,13 +220,13 @@
     function placePan() {
       pan.R = 60 * U;
       const bottom = view.h ? Math.min(view.y + view.h, H) : H;
-      pan.baseX = 0; pan.baseY = (H / 2 - bottom) + pan.R * 1.05;
+      pan.baseX = 0; pan.baseY = (H / 2 - bottom) + pan.R * 0.55;   // 鍋緣貼著畫面底部
       pan.group.position.set(pan.baseX, pan.baseY, 50);
       pan.group.scale.setScalar(pan.R);
     }
     // 加一顆菜到鍋裡
     function addToPan(type) {
-      const m = type.build(); m.scale.setScalar(0.16 + Math.random() * 0.05);
+      const m = makeProduce(type); m.scale.setScalar(0.16 + Math.random() * 0.05);
       const a = Math.random() * Math.PI * 2, r = Math.random() * 0.55;
       m.position.set(Math.cos(a) * r, 0.1, Math.sin(a) * r);
       m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
@@ -256,15 +259,15 @@
 
     // ---------- 掉落的蔬果 ----------
     const falling = [];
-    let spawnTimer = 0;
+    let spawnTimer = 0, grabCooldown = 0;
     function spawnProduce() {
       const type = PRODUCE[Math.floor(Math.random() * PRODUCE.length)];
-      const m = type.build();
+      const m = makeProduce(type);
       const size = (16 + Math.random() * 8) * U;
       m.scale.setScalar(size);
       const left = view.x + size * 1.5, right = view.x + view.w - size * 1.5;
       const sx = left + Math.random() * (right - left);
-      m.position.set(sx - W / 2, H / 2 + size * 2, 120);
+      m.position.set(sx - W / 2, H / 2 + size * 2, 400);
       m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
       m.userData = { type, size, vy: -(70 + Math.random() * 50) * U, sway: Math.random() * Math.PI * 2, swayAmp: (8 + Math.random() * 12) * U,
         rx: (Math.random() - .5) * 1.5, ry: (Math.random() - .5) * 1.5, baseX: sx - W / 2 };
@@ -276,7 +279,7 @@
     function launchLight(from, type) {
       const orb = new THREE.Mesh(new THREE.SphereGeometry(7 * U, 12, 10), new THREE.MeshBasicMaterial({ color: type.color }));
       orb.position.copy(from); scene.add(orb);
-      const to = new THREE.Vector3(pan.baseX, pan.baseY + pan.R * 0.25, 200);
+      const to = new THREE.Vector3(pan.baseX, pan.baseY + pan.R * 0.25, 450);
       const ctrl = from.clone().lerp(to, 0.5); ctrl.y += 120 * U; ctrl.x += (Math.random() - .5) * 120 * U;
       lights.push({ orb, from: from.clone(), ctrl, to, t: 0, type, col: new THREE.Color(type.color) });
     }
@@ -286,7 +289,7 @@
       const col = new THREE.Color(colorHex);
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2, sp = (60 + Math.random() * 160) * U;
-        sparkSys.list.push({ x: pos.x, y: pos.y, z: pos.z + 5, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp + 60 * U, vz: 0,
+        sparkSys.list.push({ x: pos.x, y: pos.y, z: 460, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp + 60 * U, vz: 0,
           life: 1, decay: 1.6 + Math.random() * 1.2, r: col.r, g: col.g, b: col.b, a: 1 });
       }
     }
@@ -304,6 +307,33 @@
       for (const [a, b] of CONNECTIONS) { const p = toScreen(lm[a]), q = toScreen(lm[b]); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
       ctx.fillStyle = color;
       for (let i = 0; i < 21; i++) { const p = toScreen(lm[i]); ctx.beginPath(); ctx.arc(p.x, p.y, 4 * U, 0, Math.PI * 2); ctx.fill(); }
+    }
+
+    // ---------- 手的遮罩：手經過帽子前面時，帽子被挖掉，露出真實的手 ----------
+    const handOccluders = [0, 1].map(() => {
+      const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ colorWrite: false }));
+      m.renderOrder = -5; m.visible = false; m.position.z = 300; scene.add(m); return m;
+    });
+    function convexHull(pts) {
+      pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+      const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      const lower = []; for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+      const upper = []; for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+      upper.pop(); lower.pop(); return lower.concat(upper);
+    }
+    function updateHandOccluders(hands) {
+      handOccluders.forEach(m => m.visible = false);
+      hands.slice(0, 2).forEach((h, i) => {
+        const pts = h.lm.map(p => { const s = toScreen(p); return { x: s.x - W / 2, y: H / 2 - s.y }; });
+        const hull = convexHull(pts); if (hull.length < 3) return;
+        let cx = 0, cy = 0; for (const p of hull) { cx += p.x; cy += p.y; } cx /= hull.length; cy /= hull.length;
+        const w0 = pts[0], m9 = pts[9]; const pad = Math.max(14 * U, Math.hypot(m9.x - w0.x, m9.y - w0.y) * 0.22);
+        const shape = new THREE.Shape();
+        hull.forEach((p, k) => { const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy) || 1;
+          const x = p.x + dx / d * pad, y = p.y + dy / d * pad; k ? shape.lineTo(x, y) : shape.moveTo(x, y); });
+        shape.closePath();
+        const m = handOccluders[i]; m.geometry.dispose(); m.geometry = new THREE.ShapeGeometry(shape); m.visible = true;
+      });
     }
 
     // ---------- 主更新 ----------
@@ -332,11 +362,14 @@
         if (showHands.checked) drawHand(lm, h.closed ? '#fbbf24' : '#4ade80');
       });
 
+      updateHandOccluders(hands);
+
       // 生成蔬果
       spawnTimer -= dt;
       if (spawnTimer <= 0 && falling.length < 6) { spawnProduce(); spawnTimer = 1.0 + Math.random() * 1.2; }
 
       // 蔬果掉落 + 抓取
+      grabCooldown -= dt;
       const bottomY = -(H / 2) - 60 * U;
       for (let i = falling.length - 1; i >= 0; i--) {
         const m = falling[i], d = m.userData;
@@ -347,10 +380,11 @@
         // 抓取判定：握拳且手掌靠近
         const sx = m.position.x + W / 2, sy = H / 2 - m.position.y;
         let grabbed = false;
-        for (const h of hands) {
+        if (grabCooldown <= 0) for (const h of hands) {
           if (h.closed && Math.hypot(h.palm.x - sx, h.palm.y - sy) < d.size * 1.6 + 25 * U) { grabbed = true; break; }
         }
         if (grabbed) {
+          grabCooldown = 0.35;   // 每 0.35 秒最多抓一顆，避免瞬間大量特效
           burst(m.position, d.type.color);
           launchLight(m.position, d.type);
           scene.remove(m); falling.splice(i, 1);
@@ -365,15 +399,15 @@
         const t = Math.min(1, L.t), it = 1 - t;
         const p = new THREE.Vector3(
           it * it * L.from.x + 2 * it * t * L.ctrl.x + t * t * L.to.x,
-          it * it * L.from.y + 2 * it * t * L.ctrl.y + t * t * L.to.y, 200);
+          it * it * L.from.y + 2 * it * t * L.ctrl.y + t * t * L.to.y, 450);
         L.orb.position.copy(p);
-        for (let k = 0; k < 3; k++) sparkSys.list.push({ x: p.x + (Math.random() - .5) * 6 * U, y: p.y + (Math.random() - .5) * 6 * U, z: 190,
+        for (let k = 0; k < 3; k++) sparkSys.list.push({ x: p.x + (Math.random() - .5) * 6 * U, y: p.y + (Math.random() - .5) * 6 * U, z: 460,
           vx: (Math.random() - .5) * 30 * U, vy: (Math.random() - .5) * 30 * U, vz: 0, life: 1, decay: 3, r: L.col.r, g: L.col.g, b: L.col.b, a: 1 });
         if (L.t >= 1) {
           scene.remove(L.orb); lights.splice(i, 1);
           addToPan(L.type);
           burst(L.to, 0xffe08a, 30);
-          pan.cookUntil = now + 3000;
+          pan.cookUntil = now + 3000;   // 重新計 3 秒，不累加
           score++; scoreEl.textContent = '🍳 ' + score;
         }
       }
@@ -427,6 +461,8 @@
         q.life -= q.decay * dt; if (q.life <= 0) { sparkSys.list.splice(i, 1); continue; }
         q.vy -= 250 * U * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.a = q.life; }
 
+      if (sparkSys.list.length > 500) sparkSys.list.splice(0, sparkSys.list.length - 500);
+      if (fireSys.list.length > 550) fireSys.list.splice(0, fireSys.list.length - 550);
       flushParticles(fireSys); flushParticles(steamSys); flushParticles(sparkSys);
       renderer.render(scene, camera);
 
